@@ -1,7 +1,7 @@
 # Copyright Contributors to the Open Cluster Management project
 # Licensed under the Apache License 2.0
 
-FROM brew.registry.redhat.io/rh-osbs/openshift-golang-builder:rhel_9_1.21 AS builder
+FROM brew.registry.redhat.io/rh-osbs/openshift-golang-builder:rhel_8_golang_1.22 as builder
 
 WORKDIR $GOPATH/src/github.com/thanos-io/thanos
 
@@ -13,7 +13,9 @@ RUN git update-index --refresh; make build -f Makefile.rhtap
 
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
 
-LABEL maintainer="The ACM Thanos maintainers"
+LABEL maintainer="The ACM Thanos maintainers" \
+      name="rhobs-thanos" \
+      summary="Thanos for RHOBS"
 
 COPY --from=builder /go/bin/thanos /bin/thanos
 

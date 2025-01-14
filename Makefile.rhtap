@@ -1,0 +1,23 @@
+include Makefile
+
+# Override build, crossbuild targets from Makefile
+# to use promu to build dynamic binaries
+.PHONY: build
+build: ## Builds Thanos binary using `promu`.
+build: check-git deps $(PROMU)
+	@echo ">> building Thanos binary in $(PREFIX)"
+	@go mod vendor && $(PROMU) -c ".promu.prow.yaml" build -v --cgo --prefix $(PREFIX)
+
+GIT_BRANCH=$(shell $(GIT) rev-parse --abbrev-ref HEAD)
+.PHONY: crossbuild
+crossbuild: ## Builds all binaries for all platforms.
+ifeq ($(GIT_BRANCH), main)
+crossbuild: | $(PROMU)
+	@echo ">> crossbuilding all binaries"
+	# we only care about below two for the main branch
+	@go mod vendor && $(PROMU) -c ".promu.prow.yaml" crossbuild -v --cgo -p linux/amd64
+else
+crossbuild: | $(PROMU)
+	@echo ">> crossbuilding all binaries"
+	@go mod vendor && $(PROMU) -c ".promu.prow.yaml"  crossbuild -v --cgo
+endif
