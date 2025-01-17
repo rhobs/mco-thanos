@@ -1,24 +1,32 @@
 # Copyright Contributors to the Open Cluster Management project
 # Licensed under the Apache License 2.0
-
 FROM brew.registry.redhat.io/rh-osbs/openshift-golang-builder:rhel_8_golang_1.22 as builder
 
-WORKDIR $GOPATH/src/github.com/thanos-io/thanos
+WORKDIR /workspace
 
-COPY . $GOPATH/src/github.com/thanos-io/thanos
+COPY thanos .
 
-RUN git update-index --refresh; make build -f Makefile.rhtap
+ENV GOFLAGS='-mod=mod'
+ENV CGO_ENABLED=0
   
-  # -----------------------------------------------------------------------------
+# Install promu and build thanos
+ARG TARGETOS TARGETARCH
+RUN wget https://github.com/prometheus/promu/releases/download/v0.17.0/promu-0.17.0.${TARGETOS}-${TARGETARCH}.tar.gz \
+&& tar -xzf promu-0.17.0.${TARGETOS}-${TARGETARCH}.tar.gz -C /usr/local/bin \
+&& rm promu-0.17.0.${TARGETOS}-${TARGETARCH}.tar.gz \
+&& /usr/local/bin/promu-0.17.0.${TARGETOS}-${TARGETARCH}/promu -v build --prefix /go/bin/
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+FROM registry.redhat.io/ubi8/ubi-minimal:8.10-1130
+WORKDIR /
+
+COPY --from=builder /go/bin/thanos /bin/thanos
+COPY --from=builder /workspace/LICENSE      /licenses/.
+
+USER nobody
+RUN microdnf update -y && microdnf clean all
+ENTRYPOINT [ "/bin/thanos" ]
 
 LABEL maintainer="The ACM Thanos maintainers" \
       name="rhobs-thanos" \
       summary="Thanos for RHOBS"
 
-COPY --from=builder /go/bin/thanos /bin/thanos
-
-RUN microdnf update -y && microdnf clean all
-
-ENTRYPOINT [ "/bin/thanos" ]
