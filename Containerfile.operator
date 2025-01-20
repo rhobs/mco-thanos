@@ -7,6 +7,9 @@ WORKDIR $GOPATH/src/github.com/thanos-io/thanos
 
 COPY . $GOPATH/src/github.com/thanos-io/thanos
 
+ENV GOFLAGS='-mod=mod'
+ENV CGO_ENABLED=0
+
 RUN git update-index --refresh; make build -f Makefile.rhtap
   
   # -----------------------------------------------------------------------------
