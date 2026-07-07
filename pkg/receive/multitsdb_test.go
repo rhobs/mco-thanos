@@ -521,7 +521,8 @@ func TestMultiTSDBRecreatePrunedTenant(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
 
-		m := NewMultiTSDB(openTestRoot(t, dir), log.NewLogfmtLogger(os.Stderr), prometheus.NewRegistry(),
+		reg := prometheus.NewRegistry()
+		m := NewMultiTSDB(openTestRoot(t, dir), log.NewLogfmtLogger(os.Stderr), reg,
 			&tsdb.Options{
 				MinBlockDuration:  (2 * time.Hour).Milliseconds(),
 				MaxBlockDuration:  (2 * time.Hour).Milliseconds(),
@@ -538,10 +539,14 @@ func TestMultiTSDBRecreatePrunedTenant(t *testing.T) {
 		defer m.Close()
 
 		testutil.Ok(t, appendSample(m, "foo", time.UnixMilli(int64(10))))
+		testutil.Assert(t, tenantMetricCount(t, reg, "foo") > 0, "tenant TSDB metrics should be registered")
 		time.Sleep(5 * time.Hour)
 		synctest.Wait()
 		testutil.Ok(t, m.Prune(context.Background()))
 		testutil.Equals(t, 0, len(m.TSDBLocalClients()))
+		testutil.Assert(t, tenantMetricCount(t, reg, "foo") == 0, "tenant TSDB metrics should be not registered")
+		_, err := reg.Gather()
+		testutil.Ok(t, err)
 
 		testutil.Ok(t, appendSample(m, "foo", time.UnixMilli(int64(10))))
 		testutil.Equals(t, 1, len(m.TSDBLocalClients()))
@@ -566,48 +571,6 @@ func tenantMetricCount(t *testing.T, g prometheus.Gatherer, tenant string) int {
 		}
 	}
 	return count
-}
-
-// TestMultiTSDBPruneUnregistersMetrics verifies that pruning (deleting) a tenant
-// unregisters all of its TSDB metric collectors. Otherwise scrapes keep
-// collecting dynamic gauges (e.g. the chunks_head directory size) against a data
-// directory that has been removed, logging errors such as
-// "lstat .../chunks_head: no such file or directory".
-func TestMultiTSDBPruneUnregistersMetrics(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		dir := t.TempDir()
-
-		reg := prometheus.NewRegistry()
-		m := NewMultiTSDB(openTestRoot(t, dir), log.NewLogfmtLogger(os.Stderr), reg,
-			&tsdb.Options{
-				MinBlockDuration:  (2 * time.Hour).Milliseconds(),
-				MaxBlockDuration:  (2 * time.Hour).Milliseconds(),
-				RetentionDuration: (6 * time.Hour).Milliseconds(),
-			},
-			labels.FromStrings("replica", "test"),
-			"tenant_id",
-			nil,
-			false,
-			false,
-			metadata.NoneFunc,
-			WithGCImmediately(),
-		)
-		defer m.Close()
-
-		testutil.Ok(t, appendSample(m, "foo", time.UnixMilli(int64(10))))
-		testutil.Assert(t, tenantMetricCount(t, reg, "foo") > 0, "tenant TSDB metrics should be registered")
-
-		time.Sleep(5 * time.Hour)
-		synctest.Wait()
-		testutil.Ok(t, m.Prune(context.Background()))
-		testutil.Equals(t, 0, len(m.TSDBLocalClients()))
-
-		// All per-tenant collectors must be gone and gathering must not error
-		// even though the tenant's data directory was removed.
-		testutil.Equals(t, 0, tenantMetricCount(t, reg, "foo"))
-		_, err := reg.Gather()
-		testutil.Ok(t, err)
-	})
 }
 
 // synctest.Test controls fake time so t.Parallel() is not used.
