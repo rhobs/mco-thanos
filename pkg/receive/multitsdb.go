@@ -576,6 +576,10 @@ func (t *tenant) close(cd closeDelete) {
 	t.closeOnce.Do(func() {
 		close(t.doneC)
 
+		if t.reg != nil {
+			t.reg.UnregisterAll()
+		}
+
 		// NOTE(GiedriusS): on paper, we could Close() again but the TSDB's Close() function is not idempotent.
 		// If storage starts erroring out then we are hosed anyway, so just log an error.
 		if err := t.tsdb.Close(); err != nil {
@@ -637,9 +641,6 @@ func (t *tenant) set(storeTSDB *store.TSDBStore, tenantTSDB *tsdb.DB, ship *ship
 func (t *tenant) setComponents(storeTSDB *store.TSDBStore, ship *shipper.Shipper, exemplarsTSDB *exemplars.TSDB, tenantTSDB *tsdb.DB, reg *UnRegisterer) {
 	if storeTSDB == nil && t.storeTSDB != nil {
 		t.storeTSDB.Close()
-	}
-	if reg == nil && t.reg != nil {
-		t.reg.UnregisterAll()
 	}
 	t.storeTSDB = storeTSDB
 	t.reg = reg
@@ -935,7 +936,8 @@ func (t *MultiTSDB) TenantStats(limit int, statsByLabelName string, tenantIDs ..
 
 func (t *MultiTSDB) startTSDB(logger log.Logger, tenantID string, tenant *tenant) error {
 	reg := prometheus.WrapRegistererWith(prometheus.Labels{"tenant": tenantID}, t.reg)
-	reg = NewUnRegisterer(reg)
+	unreg := NewUnRegisterer(reg)
+	reg = unreg
 
 	initialLset := labelpb.ExtendSortedLabels(t.labels, labels.FromStrings(t.tenantLabelName, tenantID))
 	lset := t.extractTenantsLabels(tenantID, initialLset)
@@ -1004,6 +1006,7 @@ func (t *MultiTSDB) startTSDB(logger log.Logger, tenantID string, tenant *tenant
 		nil,
 	)
 	if err != nil {
+		unreg.UnregisterAll()
 		t.removeTenantLocked(tenantID)
 		return err
 	}
@@ -1018,6 +1021,9 @@ func (t *MultiTSDB) startTSDB(logger log.Logger, tenantID string, tenant *tenant
 		// shipDataDir must be closed together with tenant
 		shipDataDir, err := os.OpenRoot(dataDir)
 		if err != nil {
+			s.Close()
+			unreg.UnregisterAll()
+			t.removeTenantLocked(tenantID)
 			return err
 		}
 		ship = shipper.New(
@@ -1269,7 +1275,6 @@ func (u *UnRegisterer) MustRegister(cs ...prometheus.Collector) {
 			panic(err)
 		}
 	}
-	u.collectors = append(u.collectors, cs...)
 }
 
 // extractTenantsLabels extracts tenant's external labels from hashring configs.
