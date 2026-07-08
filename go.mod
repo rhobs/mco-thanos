@@ -2,11 +2,6 @@ module github.com/thanos-io/thanos
 
 go 1.26.0
 
-// TODO(Aleksandr Krivoshchekov):
-//     Remove this replacement, once https://github.com/thanos-io/promql-engine/pull/680
-//     is mergeed.
-replace github.com/thanos-io/promql-engine => github.com/SuperPaintman/promql-engine v0.0.0-20260121063704-e975db89c0cb
-
 require (
 	capnproto.org/go/capnp/v3 v3.1.0-alpha.1
 	cloud.google.com/go/trace v1.11.6
@@ -75,7 +70,7 @@ require (
 	github.com/sony/gobreaker v1.0.0
 	github.com/stretchr/testify v1.11.1
 	github.com/thanos-io/objstore v0.0.0-20250804093838-71d60dfee488
-	github.com/thanos-io/promql-engine v0.0.0-20260513095632-c5f6038078e3
+	github.com/thanos-io/promql-engine v0.0.0-20260707114442-fa2cb843e6ba
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
 	github.com/vimeo/galaxycache v1.3.1
 	github.com/weaveworks/common v0.0.0-20230728070032-dd9e68f319d5
