@@ -287,8 +287,6 @@ type QuerierBuilder struct {
 	deduplicationFunc                       string
 	disabledFallback                        bool
 
-	seriesResponseBatchSize string
-
 	replicaLabels []string
 	tracingConfig string
 
@@ -390,11 +388,6 @@ func (q *QuerierBuilder) WithQueryMode(mode string) *QuerierBuilder {
 
 func (q *QuerierBuilder) WithDisabledFallback() *QuerierBuilder {
 	q.disabledFallback = true
-	return q
-}
-
-func (q *QuerierBuilder) WithResponseSeriesBatchSize(seriesResponseBatchSize string) *QuerierBuilder {
-	q.seriesResponseBatchSize = seriesResponseBatchSize
 	return q
 }
 
@@ -564,9 +557,6 @@ func (q *QuerierBuilder) collectArgs() ([]string, error) {
 	}
 	if q.disabledFallback {
 		args = append(args, "--query.disable-fallback")
-	}
-	if q.seriesResponseBatchSize != "" {
-		args = append(args, "--query.series-response-batch-size="+q.seriesResponseBatchSize)
 	}
 	if q.queryDistributedWithOverlappingInterval {
 		args = append(args, "--query.distributed-with-overlapping-interval")
@@ -826,6 +816,7 @@ type RulerBuilder struct {
 	forGracePeriod       string
 	restoreIgnoredLabels []string
 	nativeHistograms     bool
+	objStoreConfig       *client.BucketConfig
 }
 
 // NewRulerBuilder is a Ruler future that allows extra configuration before initialization.
@@ -878,6 +869,11 @@ func (r *RulerBuilder) WithRestoreIgnoredLabels(labels ...string) *RulerBuilder 
 
 func (r *RulerBuilder) WithNativeHistograms() *RulerBuilder {
 	r.nativeHistograms = true
+	return r
+}
+
+func (r *RulerBuilder) WithObjStoreConfig(config client.BucketConfig) *RulerBuilder {
+	r.objStoreConfig = &config
 	return r
 }
 
@@ -950,6 +946,14 @@ func (r *RulerBuilder) initRule(internalRuleDir string, queryCfg []clientconfig.
 
 	if r.nativeHistograms {
 		ruleArgs["--tsdb.enable-native-histograms"] = ""
+	}
+
+	if r.objStoreConfig != nil {
+		bktConfigBytes, err := yaml.Marshal(r.objStoreConfig)
+		if err != nil {
+			return &e2eobs.Observable{Runnable: e2e.NewFailedRunnable(r.Name(), errors.Wrapf(err, "generate objstore config: %v", r.objStoreConfig))}
+		}
+		ruleArgs["--objstore.config"] = string(bktConfigBytes)
 	}
 
 	args := e2e.BuildArgs(ruleArgs)

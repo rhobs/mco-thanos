@@ -716,7 +716,7 @@ func (c *Client) LowestTimestamp(ctx context.Context, base *url.URL) (int64, err
 	}
 	defer runutil.ExhaustCloseWithLogOnErr(c.logger, resp.Body, "request body")
 
-	var parser expfmt.TextParser
+	parser := expfmt.NewTextParser(model.UTF8Validation)
 	families, err := parser.TextToMetricFamilies(resp.Body)
 	if err != nil {
 		return 0, errors.Wrapf(err, "parsing metric families against %s", u.String())
@@ -959,15 +959,18 @@ func (c *Client) TargetsInGRPC(ctx context.Context, base *url.URL, stateTargets 
 	return v.Data, c.get2xxResultWithGRPCErrors(ctx, "/prom_targets HTTP[client]", &u, &v)
 }
 
-func (c *Client) TSDBStatusInGRPC(ctx context.Context, base *url.URL, limit int) (*statuspb.TSDBStatisticsEntry, error) {
+func (c *Client) TSDBStatusInGRPC(ctx context.Context, base *url.URL, limit int, matchers ...*labels.Matcher) (*statuspb.TSDBStatisticsEntry, error) {
 	u := *base
 	u.Path = path.Join(u.Path, "/api/v1/status/tsdb")
 
-	if limit > 0 {
-		q := u.Query()
-		q.Add("limit", strconv.Itoa(limit))
-		u.RawQuery = q.Encode()
+	q := u.Query()
+	if len(matchers) > 0 {
+		q.Add("match[]", storepb.PromMatchersToString(matchers...))
 	}
+	if limit > 0 {
+		q.Add("limit", strconv.Itoa(limit))
+	}
+	u.RawQuery = q.Encode()
 
 	var v struct {
 		Data *statuspb.TSDBStatisticsEntry `json:"data"`

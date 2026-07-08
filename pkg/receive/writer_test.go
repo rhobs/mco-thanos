@@ -27,7 +27,12 @@ import (
 	"github.com/thanos-io/thanos/pkg/store/labelpb"
 	"github.com/thanos-io/thanos/pkg/store/storepb/prompb"
 	"github.com/thanos-io/thanos/pkg/tenancy"
+	"github.com/thanos-io/thanos/pkg/testutil/custom"
 )
+
+func TestMain(m *testing.M) {
+	custom.TolerantVerifyLeakMain(m)
+}
 
 func TestWriter(t *testing.T) {
 	if testing.
@@ -394,9 +399,15 @@ func TestWriter(t *testing.T) {
 					capnpReq, err := writecapnp.Build(tenancy.DefaultTenant, req.Timeseries)
 					testutil.Ok(t, err)
 
-					wr, err := writecapnp.NewRequest(capnpReq)
+					syms, err := capnpReq.Symbols()
 					testutil.Ok(t, err)
-					err = w.Write(context.Background(), tenancy.DefaultTenant, wr)
+
+					data, err := capnpReq.Data()
+					testutil.Ok(t, err)
+
+					wr, err := writecapnp.NewRequest(data.At(0), syms, tenancy.DefaultTenant)
+					testutil.Ok(t, err)
+					err = w.Write(context.Background(), wr)
 
 					// We expect no error on any request except the last one
 					// which may error (and in that case we assert on it).
@@ -431,14 +442,13 @@ func setupMultitsdb(t *testing.T, maxExemplars int64) (log.Logger, *MultiTSDB, A
 	dir := t.TempDir()
 	logger := log.NewNopLogger()
 
-	m := NewMultiTSDB(dir, logger, prometheus.NewRegistry(), &tsdb.Options{
-		MinBlockDuration:       (2 * time.Hour).Milliseconds(),
-		MaxBlockDuration:       (2 * time.Hour).Milliseconds(),
-		RetentionDuration:      (6 * time.Hour).Milliseconds(),
-		NoLockfile:             true,
-		MaxExemplars:           maxExemplars,
-		EnableExemplarStorage:  true,
-		EnableNativeHistograms: true,
+	m := NewMultiTSDB(openTestRoot(t, dir), logger, prometheus.NewRegistry(), &tsdb.Options{
+		MinBlockDuration:      (2 * time.Hour).Milliseconds(),
+		MaxBlockDuration:      (2 * time.Hour).Milliseconds(),
+		RetentionDuration:     (6 * time.Hour).Milliseconds(),
+		NoLockfile:            true,
+		MaxExemplars:          maxExemplars,
+		EnableExemplarStorage: true,
 	},
 		labels.FromStrings("replica", "01"),
 		"tenant_id",
@@ -447,7 +457,7 @@ func setupMultitsdb(t *testing.T, maxExemplars int64) (log.Logger, *MultiTSDB, A
 		false,
 		metadata.NoneFunc,
 	)
-	t.Cleanup(func() { testutil.Ok(t, m.Close()) })
+	t.Cleanup(m.Close)
 
 	testutil.Ok(t, m.Flush())
 	testutil.Ok(t, m.Open())
@@ -497,14 +507,13 @@ func benchmarkWriter(b *testing.B, labelsNum int, seriesNum int, generateHistogr
 	dir := b.TempDir()
 	logger := log.NewNopLogger()
 
-	m := NewMultiTSDB(dir, logger, prometheus.NewRegistry(), &tsdb.Options{
-		MinBlockDuration:       (2 * time.Hour).Milliseconds(),
-		MaxBlockDuration:       (2 * time.Hour).Milliseconds(),
-		RetentionDuration:      (6 * time.Hour).Milliseconds(),
-		NoLockfile:             true,
-		MaxExemplars:           0,
-		EnableExemplarStorage:  true,
-		EnableNativeHistograms: generateHistograms,
+	m := NewMultiTSDB(openTestRoot(b, dir), logger, prometheus.NewRegistry(), &tsdb.Options{
+		MinBlockDuration:      (2 * time.Hour).Milliseconds(),
+		MaxBlockDuration:      (2 * time.Hour).Milliseconds(),
+		RetentionDuration:     (6 * time.Hour).Milliseconds(),
+		NoLockfile:            true,
+		MaxExemplars:          0,
+		EnableExemplarStorage: true,
 	},
 		labels.FromStrings("replica", "01"),
 		"tenant_id",
@@ -513,7 +522,7 @@ func benchmarkWriter(b *testing.B, labelsNum int, seriesNum int, generateHistogr
 		false,
 		metadata.NoneFunc,
 	)
-	b.Cleanup(func() { testutil.Ok(b, m.Close()) })
+	b.Cleanup(m.Close)
 
 	testutil.Ok(b, m.Flush())
 	testutil.Ok(b, m.Open())

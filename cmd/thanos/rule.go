@@ -76,6 +76,7 @@ import (
 	grpcserver "github.com/thanos-io/thanos/pkg/server/grpc"
 	httpserver "github.com/thanos-io/thanos/pkg/server/http"
 	"github.com/thanos-io/thanos/pkg/shipper"
+	"github.com/thanos-io/thanos/pkg/status"
 	"github.com/thanos-io/thanos/pkg/store"
 	"github.com/thanos-io/thanos/pkg/store/labelpb"
 	"github.com/thanos-io/thanos/pkg/store/storepb"
@@ -174,8 +175,8 @@ func registerRule(app *extkingpin.App) {
 	cmd.Flag("enable-feature", "Comma separated feature names to enable. Valid options for now: promql-experimental-functions (enables promql experimental functions for ruler)").Default("").StringsVar(&conf.EnableFeatures)
 
 	cmd.Flag("tsdb.enable-native-histograms",
-		"[EXPERIMENTAL] Enables the ingestion of native histograms.").
-		Default("false").BoolVar(&conf.tsdbEnableNativeHistograms)
+		"(Deprecated) Enables the ingestion of native histograms. This flag is a no-op now and will be removed in the future. Native histogram ingestion is always enabled.").
+		Default("true").BoolVar(&conf.tsdbEnableNativeHistograms)
 
 	conf.rwConfig = extflag.RegisterPathOrContent(cmd, "remote-write.config", "YAML config for the remote-write configurations, that specify servers where samples should be sent to (see https://prometheus.io/docs/prometheus/latest/configuration/configuration/#remote_write). This automatically enables stateless mode for ruler and no series will be stored in the ruler's TSDB. If an empty config (or file) is provided, the flag is ignored and ruler is run with its own TSDB.", extflag.WithEnvSubstitution())
 
@@ -196,12 +197,11 @@ func registerRule(app *extkingpin.App) {
 		}
 
 		tsdbOpts := &tsdb.Options{
-			MinBlockDuration:       int64(time.Duration(*tsdbBlockDuration) / time.Millisecond),
-			MaxBlockDuration:       int64(time.Duration(*tsdbBlockDuration) / time.Millisecond),
-			RetentionDuration:      int64(time.Duration(*tsdbRetention) / time.Millisecond),
-			NoLockfile:             *noLockFile,
-			WALCompression:         compressutil.ParseCompressionType(*walCompression, compression.Snappy),
-			EnableNativeHistograms: conf.tsdbEnableNativeHistograms,
+			MinBlockDuration:  int64(time.Duration(*tsdbBlockDuration) / time.Millisecond),
+			MaxBlockDuration:  int64(time.Duration(*tsdbBlockDuration) / time.Millisecond),
+			RetentionDuration: int64(time.Duration(*tsdbRetention) / time.Millisecond),
+			NoLockfile:        *noLockFile,
+			WALCompression:    compressutil.ParseCompressionType(*walCompression, compression.Snappy),
 		}
 
 		agentOpts := &agent.Options{
@@ -422,16 +422,18 @@ func runRule(
 			logger,
 			reg,
 			tracer,
-			false,
-			false,
-			"",
-			"",
-			"",
-			"",
 		)
 		if err != nil {
 			return err
 		}
+
+		tlsDialOpts, err := extgrpc.StoreClientTLSCredentials(logger, false, false, "", "", "", "", "")
+		if err != nil {
+			return err
+		}
+
+		// No TLS config for rule component
+		noTLSConfig := &tlsConfig{}
 
 		grpcEndpointSet, err = setupEndpointSet(
 			g,
@@ -452,6 +454,9 @@ func runRule(
 			5*time.Second,
 			conf.evalInterval,
 			dialOpts,
+			noTLSConfig,
+			tlsDialOpts,
+			"", // no global compression
 			[]string{},
 		)
 		if err != nil {
@@ -481,9 +486,10 @@ func runRule(
 
 		slogger := logutil.GoKitLogToSlog(logger)
 		// flushDeadline is set to 1m, but it is for metadata watcher only so not used here.
+		// TODO: add type and unit labels support?
 		remoteStore := remote.NewStorage(slogger, reg, func() (int64, error) {
 			return 0, nil
-		}, conf.dataDir, 1*time.Minute, &readyScrapeManager{})
+		}, conf.dataDir, 1*time.Minute, &readyScrapeManager{}, false)
 		if err := remoteStore.ApplyConfig(&config.Config{
 			GlobalConfig: config.GlobalConfig{
 				ExternalLabels: labelsTSDBToProm(conf.lset),
@@ -735,7 +741,7 @@ func runRule(
 	)
 
 	// Start gRPC server.
-	tlsCfg, err := tls.NewServerConfig(log.With(logger, "protocol", "gRPC"), conf.grpc.tlsSrvCert, conf.grpc.tlsSrvKey, conf.grpc.tlsSrvClientCA, conf.grpc.tlsMinVersion)
+	tlsCfg, err := tls.NewServerConfig(log.With(logger, "protocol", "gRPC"), conf.grpc.tlsSrvCert, conf.grpc.tlsSrvKey, conf.grpc.tlsSrvClientCA, conf.grpc.tlsMinVersion, conf.grpc.tlsCiphers, conf.grpc.tlsCurves)
 	if err != nil {
 		return errors.Wrap(err, "setup gRPC server")
 	}
@@ -768,9 +774,41 @@ func runRule(
 				}
 				return nil, errors.New("Not ready")
 			}),
+			info.WithStatusInfoFunc(),
 		)
 		storeServer := store.NewLimitedStoreServer(store.NewInstrumentedStoreServer(reg, tsdbStore), reg, conf.storeRateLimits)
 		options = append(options, grpcserver.WithServer(store.RegisterStoreServer(storeServer, logger)))
+
+		// Add Status server for TSDB statistics
+		statusSrv := status.NewServer(
+			component.Rule.String(),
+			status.WithTSDBStatisticsGetter(
+				status.TSDBStatisticsGetterFunc(func(limit int, matchers []storepb.LabelMatcher) (map[string]tsdb.Stats, error) {
+					if !httpProbe.IsReady() {
+						return nil, errors.New("not ready")
+					}
+
+					// Check if external labels match the provided matchers.
+					extLabels := conf.lset
+					promMatchers, err := storepb.MatchersToPromMatchers(matchers...)
+					if err != nil {
+						return nil, errors.Wrap(err, "failed to convert matchers")
+					}
+					for _, matcher := range promMatchers {
+						if !matcher.Matches(extLabels.Get(matcher.Name)) {
+							// External labels don't match, return empty result.
+							return nil, nil
+						}
+					}
+
+					stats := tsdbDB.Head().Stats(labels.MetricName, limit)
+					return map[string]tsdb.Stats{
+						"": *stats,
+					}, nil
+				}),
+			),
+		)
+		options = append(options, grpcserver.WithServer(status.RegisterStatusServer(statusSrv)))
 	}
 
 	options = append(options, grpcserver.WithServer(
@@ -853,16 +891,14 @@ func runRule(
 		}
 		bkt = objstoretracing.WrapWithTraces(objstore.WrapWithMetrics(bkt, extprom.WrapRegistererWithPrefix("thanos_", reg), bkt.Name()))
 
-		// Ensure we close up everything properly.
-		defer func() {
-			if err != nil {
-				runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
-			}
-		}()
+		dataDir, err := os.OpenRoot(conf.dataDir)
+		if err != nil {
+			return errors.Wrap(err, "open data dir")
+		}
 
 		s := shipper.New(
 			bkt,
-			conf.dataDir,
+			dataDir,
 			shipper.WithLogger(logger),
 			shipper.WithRegisterer(reg),
 			shipper.WithSource(metadata.RulerSource),
@@ -878,7 +914,6 @@ func runRule(
 
 		g.Add(func() error {
 			defer runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
-
 			return runutil.Repeat(30*time.Second, ctx.Done(), func() error {
 				if _, err := s.Sync(ctx); err != nil {
 					level.Warn(logger).Log("err", err)
@@ -887,6 +922,9 @@ func runRule(
 			})
 		}, func(error) {
 			cancel()
+
+			runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
+			runutil.CloseWithLogOnErr(logger, dataDir, "data dir")
 		})
 	} else {
 		level.Info(logger).Log("msg", "no supported bucket was configured, uploads will be disabled")
@@ -973,7 +1011,9 @@ func queryFuncCreator(
 			if grpcEndpointSet != nil {
 				queryAPIClients := grpcEndpointSet.GetQueryAPIClients()
 				for _, i := range rand.Perm(len(queryAPIClients)) {
-					e := query.NewRemoteEngine(logger, queryAPIClients[i], query.Opts{})
+					e := query.NewRemoteEngine(logger, queryAPIClients[i], query.Opts{
+						PartialResponse: partialResponseStrategy == storepb.PartialResponseStrategy_WARN,
+					})
 					expr, err := extpromql.ParseExpr(qs)
 					if err != nil {
 						level.Error(logger).Log("err", err, "query", qs)
