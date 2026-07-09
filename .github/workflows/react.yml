@@ -9,12 +9,12 @@ on:
 permissions:  
   contents: read
 
+env:
+  NODE_VERSION: '24'
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node: [ '24' ]
     name: React UI tests
     steps:
       - name: Checkout code
@@ -23,7 +23,7 @@ jobs:
       - name: Install nodejs
         uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
         with:
-          node-version: ${{ matrix.node }}
+          node-version: ${{ env.NODE_VERSION }}
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
