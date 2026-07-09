@@ -58,6 +58,7 @@ It is recommend to upgrade the storage components first (Receive, Store, etc.) a
 - [#8802](https://github.com/thanos-io/thanos/pull/8802): Cache: add `SendToReplicas` option while initializing Rueidis client to allow sending read-only requests to Redis replica instances.
 - [#8839](https://github.com/thanos-io/thanos/pull/8839): Store: *breaking :warning:* removed `--debug.advertise-compatibility-label`. Stores now don't advertise `@thanos_compatibility_store_type=store` external label by default, breaking compatibility with Thanos Query before v0.8.0.
 - [#8831](https://github.com/thanos-io/thanos/pull/8830): Query-Frontend: change `time_taken` field to `time_taken_ms` for consistent JSON output for easier parsing by the log collector.
+- [#8653](https://github.com/thanos-io/thanos/pull/8653): Query: prepare `remoteEndpoints` for remote engine pruning
 
 ### Removed
 
