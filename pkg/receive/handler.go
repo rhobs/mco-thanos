@@ -516,17 +516,17 @@ func determineRWVersion(r *http.Request) (int, error) {
 	if r.Header.Get("X-Prometheus-Remote-Write-Version") != "2.0.0" {
 		return 1, nil
 	}
-	ct := r.Header["Content-Type"]
-	if len(ct) == 0 {
+	ct := r.Header.Get("Content-Type")
+	if ct == "" {
 		return 0, fmt.Errorf("missing Content-Type header")
 	}
-	if ct[0] == "application/x-protobuf;proto=io.prometheus.write.v2.Request" {
+	if ct == "application/x-protobuf;proto=io.prometheus.write.v2.Request" {
 		return 2, nil
 	}
-	if ct[0] == "application/x-protobuf" {
+	if ct == "application/x-protobuf" {
 		return 1, nil
 	}
-	if ct[0] == "application/x-protobuf;proto=prometheus.WriteRequest" {
+	if ct == "application/x-protobuf;proto=prometheus.WriteRequest" {
 		return 1, nil
 	}
 	return 0, fmt.Errorf("required headers Content-Type and/or X-Prometheus-Remote-Write-Version not found")
