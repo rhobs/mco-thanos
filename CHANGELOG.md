@@ -2175,5 +2175,3 @@ Initial version to have a stable reference before [gossip protocol removal](docs
 - Bucket commands.
 - Downsampling support for UI.
 - Grafana dashboards for Thanos components.
-
-
