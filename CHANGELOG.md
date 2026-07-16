@@ -8,6 +8,14 @@ NOTE: As semantic versioning states all 0.y.z releases can contain breaking chan
 
 We use *breaking :warning:* to mark changes that are not backward compatible (relates only to v0.y.z releases.)
 
+## [v0.42.1](https://github.com/thanos-io/thanos/tree/release-0.42) - 2026 07 16
+
+This change fixes a small issue regarding timeouts in the Shipper component in the Receiver - we've accidentally set them too small. Sorry for that!
+
+### Changed
+
+- [#8920](https://github.com/thanos-io/thanos/pull/8920): receive: bump timeouts
+
 ## [v0.42.0](https://github.com/thanos-io/thanos/tree/release-0.42) - 2026 07 08
 
 The biggest new things in this release are, I think, Receive component's improvements regarding tenant's lifecycle handling, ability to have per endpoint configuration, and showing fanout information in Thanos Query. Thank you to everyone for your contributions!
@@ -2159,4 +2167,3 @@ Initial version to have a stable reference before [gossip protocol removal](docs
 - Bucket commands.
 - Downsampling support for UI.
 - Grafana dashboards for Thanos components.
-
