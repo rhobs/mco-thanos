@@ -499,10 +499,8 @@ func (t *tenant) startPeriodicUploader() {
 		panic("BUG: periodic uploader started but shipper is nil")
 	}
 
-	var interval = 30 * time.Second
-
 	doIter := func() error {
-		syncCtx, cancel := context.WithTimeout(context.Background(), interval)
+		syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		if _, err := s.Sync(syncCtx); err != nil {
 			return fmt.Errorf("sync: %w", err)
@@ -512,7 +510,7 @@ func (t *tenant) startPeriodicUploader() {
 	}
 
 	go func() {
-		ticker := time.NewTicker(interval)
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 
 		if err := doIter(); err != nil {
