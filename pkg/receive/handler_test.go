@@ -32,6 +32,7 @@ import (
 	"github.com/go-kit/log"
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
+	"github.com/jpillora/backoff"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
@@ -2317,5 +2318,55 @@ func TestHandlerFlippingHashrings(t *testing.T) {
 
 	<-time.After(1 * time.Second)
 	cancel()
+	wg.Wait()
+}
+
+// TestPeerGroupResetRace exercises peerGroup.reset() (called on the hashring
+// reload path under Handler.mtx) concurrently with the p.m-guarded accessors
+// that in-flight forward callbacks use (markPeerUnavailable, markPeerAvailable,
+// isPeerUp). reset() must take p.m or it races the peerStates map and
+// expBackoff. Run with -race to catch the regression.
+func TestPeerGroupResetRace(t *testing.T) {
+	t.Parallel()
+
+	endpoint := Endpoint{Address: "http://localhost:9090"}
+	p := &peerGroup{
+		peerStates: make(map[Endpoint]*retryState),
+		expBackoff: backoff.Backoff{
+			Factor: 2,
+			Min:    100 * time.Millisecond,
+			Max:    30 * time.Second,
+			Jitter: true,
+		},
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(4)
+
+	go func() {
+		defer wg.Done()
+		for range 1000 {
+			p.reset()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 1000 {
+			p.markPeerUnavailable(endpoint)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 1000 {
+			p.markPeerAvailable(endpoint)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 1000 {
+			p.isPeerUp(endpoint)
+		}
+	}()
+
 	wg.Wait()
 }

@@ -1970,6 +1970,9 @@ func (p *peerGroup) isPeerUp(addr Endpoint) bool {
 }
 
 func (p *peerGroup) reset() {
+	p.m.Lock()
+	defer p.m.Unlock()
+
 	p.expBackoff.Reset()
 	p.peerStates = make(map[Endpoint]*retryState)
 }
