@@ -2184,6 +2184,45 @@ func TestDistributeSeries(t *testing.T) {
 	require.Equal(t, map[string]struct{}{"bar": {}, "boo": {}}, hr.seenTenants)
 }
 
+type nopPeerClient struct{}
+
+func (nopPeerClient) RemoteWrite(context.Context, *storepb.WriteRequest, ...grpc.CallOption) (*storepb.WriteResponse, error) {
+	return &storepb.WriteResponse{}, nil
+}
+
+func (nopPeerClient) Close() error { return nil }
+
+func BenchmarkFanoutForward(b *testing.B) {
+	h := NewHandler(nil, &Options{
+		ReplicationFactor: 1,
+		ForwardTimeout:    time.Minute,
+	})
+	b.Cleanup(h.Close)
+
+	endpoint := Endpoint{Address: "http://localhost:9090"}
+	hashring, err := newSimpleHashring([]Endpoint{endpoint})
+	require.NoError(b, err)
+	h.peers = &fakePeersGroup{clients: map[Endpoint]*peerWorker{
+		endpoint: newPeerWorker(nopPeerClient{}, prometheus.NewHistogram(prometheus.HistogramOpts{}), 1, 0),
+	}}
+	h.Hashring(hashring)
+
+	params := remoteWriteParams{
+		data: []wreqTenantTuple{{
+			tenant: "bench",
+			wreq:   &prompb.WriteRequest{Timeseries: makeSeriesWithValues(1000)},
+		}},
+		replicas: []uint64{0},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, err := h.fanoutForward(b.Context(), params)
+		require.NoError(b, err)
+	}
+}
+
 func TestHandlerSplitTenantLabelLocalWrite(t *testing.T) {
 	const tenantIDLabelName = "thanos_tenant_id"
 
