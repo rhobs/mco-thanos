@@ -17,6 +17,8 @@ We use *breaking :warning:* to mark changes that are not backward compatible (re
 
 ### Fixed
 
+- [#8935](https://github.com/thanos-io/thanos/pull/8935): Receive: remove redundant tl.Set() while building a Capnp WriteRequest.
+
 ### Changed
 
 - [#8907](https://github.com/thanos-io/thanos/pull/8907): UI: Migrate the React app (`pkg/ui/react-app`) from npm to pnpm; contributors now need pnpm 11+ instead of npm to build the Web UI.
