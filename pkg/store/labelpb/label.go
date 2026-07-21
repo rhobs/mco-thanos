@@ -13,13 +13,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unique"
 	"unsafe"
 
 	"github.com/VictoriaMetrics/easyproto"
 	"github.com/cespare/xxhash/v2"
 	"github.com/pkg/errors"
 	"github.com/prometheus/prometheus/model/labels"
-	"go4.org/intern"
 )
 
 var (
@@ -60,8 +60,8 @@ func ZLabelsToPromLabels(lset []ZLabel) labels.Labels {
 func ReAllocZLabelsStrings(lset *[]ZLabel, intern bool) {
 	if intern {
 		for j, l := range *lset {
-			(*lset)[j].Name = detachAndInternLabelString(l.Name)
-			(*lset)[j].Value = detachAndInternLabelString(l.Value)
+			(*lset)[j].Name = unique.Make(l.Name).Value()
+			(*lset)[j].Value = unique.Make(l.Value).Value()
 		}
 		return
 	}
@@ -70,19 +70,6 @@ func ReAllocZLabelsStrings(lset *[]ZLabel, intern bool) {
 		(*lset)[j].Name = string(noAllocBytes(l.Name))
 		(*lset)[j].Value = string(noAllocBytes(l.Value))
 	}
-}
-
-// internLabelString is a helper method to intern a label string or,
-// if the string was previously interned, it returns the existing
-// reference and asserts it to a string.
-func internLabelString(s string) string {
-	return intern.GetByString(s).Get().(string)
-}
-
-// detachAndInternLabelString reallocates the label string to detach it
-// from a bigger memory pool and interns the string.
-func detachAndInternLabelString(s string) string {
-	return internLabelString(string(noAllocBytes(s)))
 }
 
 // ZLabelSetsToPromLabelSets converts slice of labelpb.ZLabelSet to slice of Prometheus labels.
