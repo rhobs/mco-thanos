@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/colega/zeropool"
+
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/gogo/protobuf/proto"
@@ -153,6 +155,24 @@ type Handler struct {
 	pendingWriteRequestsCounter atomic.Int32
 
 	Limiter *Limiter
+
+	seriesIDsPool     zeropool.Pool[[]int]
+	timeSeriesPool    zeropool.Pool[[]prompb.TimeSeries]
+	distributeMapPool zeropool.Pool[map[endpointReplica]map[string]trackedSeries]
+	trackedSeries     zeropool.Pool[map[string]trackedSeries]
+	intScratchPool    zeropool.Pool[[]int]
+}
+
+// getIntScratch returns a zeroed []int of length n from intScratchPool.
+// clear is required: reslicing a pooled slice back up exposes stale values.
+func (h *Handler) getIntScratch(n int) []int {
+	s := h.intScratchPool.Get()
+	if cap(s) < n {
+		return make([]int, n)
+	}
+	s = s[:n]
+	clear(s)
+	return s
 }
 
 func NewHandler(logger log.Logger, o *Options) *Handler {
@@ -984,7 +1004,6 @@ func (h *Handler) fanoutForward(ctx context.Context, params remoteWriteParams) (
 		level.Error(requestLogger).Log("msg", "failed to distribute timeseries to replicas", "err", err)
 		return stats, err
 	}
-
 	stats = h.gatherWriteStats(len(params.replicas), writes)
 
 	// Prepare a buffered channel to receive the responses from the local and remote writes. Remote writes will all go
@@ -1012,6 +1031,19 @@ func (h *Handler) fanoutForward(ctx context.Context, params remoteWriteParams) (
 					level.Debug(requestLogger).Log("msg", "request failed, but not needed to achieve quorum", "err", resp.err)
 				}
 			}
+
+			for _, er := range writes {
+				for _, v := range er {
+					h.seriesIDsPool.Put(v.seriesIDs[:0])
+					h.timeSeriesPool.Put(v.timeSeries[:0])
+				}
+
+				clear(er)
+				h.trackedSeries.Put(er)
+			}
+
+			clear(writes)
+			h.distributeMapPool.Put(writes)
 		}()
 	}()
 
@@ -1026,12 +1058,17 @@ func (h *Handler) fanoutForward(ctx context.Context, params remoteWriteParams) (
 	for _, tup := range params.data {
 		numSeries += len(tup.wreq.Timeseries)
 	}
-	successes := make([]int, numSeries)
-	failures := make([]int, numSeries)
+	successes := h.getIntScratch(numSeries)
+	failures := h.getIntScratch(numSeries)
 	// conflictFailures tracks how many replicas returned a permanent conflict for
 	// each series. When conflictFailures[i] >= failureThreshold the series can
 	// never reach quorum regardless of retries.
-	conflictFailures := make([]int, numSeries)
+	conflictFailures := h.getIntScratch(numSeries)
+	defer func() {
+		h.intScratchPool.Put(successes[:0])
+		h.intScratchPool.Put(failures[:0])
+		h.intScratchPool.Put(conflictFailures[:0])
+	}()
 	seriesErrs := newReplicationErrors(successThreshold, numSeries)
 	for {
 		select {
@@ -1083,7 +1120,11 @@ func (h *Handler) distributeTimeseriesToReplicas(
 ) (map[endpointReplica]map[string]trackedSeries, error) {
 	h.mtx.RLock()
 	defer h.mtx.RUnlock()
-	writes := make(map[endpointReplica]map[string]trackedSeries)
+	writes := h.distributeMapPool.Get()
+	if writes == nil {
+		writes = make(map[endpointReplica]map[string]trackedSeries)
+	}
+
 	seriesID := -1
 	for _, tup := range data {
 		for _, ts := range tup.wreq.Timeseries {
@@ -1118,12 +1159,16 @@ func (h *Handler) distributeTimeseriesToReplicas(
 
 				writeableSeries, ok := writes[endpointReplica]
 				if !ok {
-					writes[endpointReplica] = map[string]trackedSeries{
-						tenant: {
-							seriesIDs:  make([]int, 0),
-							timeSeries: make([]prompb.TimeSeries, 0),
-						},
+					writeableSeries = h.trackedSeries.Get()
+					if writeableSeries == nil {
+						writeableSeries = make(map[string]trackedSeries)
 					}
+
+					writeableSeries[tenant] = trackedSeries{
+						seriesIDs:  h.seriesIDsPool.Get(),
+						timeSeries: h.timeSeriesPool.Get(),
+					}
+					writes[endpointReplica] = writeableSeries
 				}
 				tenantSeries := writeableSeries[tenant]
 
